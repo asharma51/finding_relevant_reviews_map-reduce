@@ -1,0 +1,90 @@
+//load map-reduce output file as out alias
+out  = LOAD 'hdfs://quickstart.cloudera:8020/user/cloudera/mapr_out/out' AS (user:int, average:double);
+
+//load ratings.csv file as ratings alias 
+ratings  = LOAD 'hdfs://quickstart.cloudera:8020/user/cloudera/dataset/ratings.csv' USING PigStorage(',') AS (user:int,movie:int,rating:double);
+
+//join the two loaded aliases
+out_ratings = JOIN out BY user,ratings BY user;
+
+//delta is the final joined alias  with diff column
+delta = FOREACH out_ratings GENERATE out::user,out::average,ratings::movie,ratings::rating,ABS(average - rating) AS diff:double;
+
+//delta_filter is the final joined filtered alias 
+delta_filter = FILTER delta BY diff > 1.0;
+//verify schema of delta_filter
+grunt> describe delta_filter;
+delta_filter: {out::user: int,out::average: double,ratings::movie: int,ratings::rating: double,diff: double}
+
+//number of useful reviews after applying filter
+filter_group = GROUP delta_filter ALL;
+filter_count = FOREACH filter_group GENERATE COUNT(delta_filter);
+DUMP filter_count;
+//OUTPUT - (5462580)  
+
+//create movie first alias - movie id and filtered count
+filtermovie_group = GROUP delta_filter BY movie;
+filtermovie_count = FOREACH filtermovie_group GENERATE group AS movie, COUNT(delta_filter) AS filtered_count:int;
+
+//create movie alias two - movie id and total count
+movie_group = GROUP ratings BY movie;
+movie_count = FOREACH movie_group GENERATE group AS movie, COUNT(ratings) AS total:int;
+
+//join 2 movie aliases  to get final movie alias - movie_data (movie, total count, filtered count)
+movie_join = JOIN movie_count BY movie LEFT OUTER, filtermovie_count BY movie;
+movie_data = FOREACH movie_join GENERATE movie_count::movie AS movie, movie_count::total AS total, filtermovie_count::filtered_count AS filtered_count;
+//verify schema
+grunt> describe movie_data;
+movie_data: {movie: int,total: int,filtered_count: int}
+
+//create subset of size 10 of movie_data
+movie_top = LIMIT movie_data 10;
+DUMP movie_top;
+//subset of 10 movies from output
+(1,49695,12986)
+(2,22243,5137)
+(3,12735,3485)
+(4,2756,979)
+(5,12161,3237)
+(6,23899,6218)
+(7,12961,2944)
+(8,1415,319)
+(9,3960,975)
+(10,29005,4916)
+
+//create user alias one - user id and filtered count
+filteruser_group = GROUP delta_filter BY user;
+filteruser_count = FOREACH filteruser_group GENERATE group AS user, COUNT(delta_filter) AS filtered_count:int;
+
+//create user alias two - user id and total count
+user_group = GROUP ratings BY user;
+user_count = FOREACH user_group GENERATE group AS user, COUNT(ratings) AS total:int;
+
+//join 2 user alias to get final user alias - user_data (user, total count, filtered count)
+user_join = JOIN user_count BY user LEFT OUTER, filteruser_count BY user;
+user_data = FOREACH user_join GENERATE user_count::user,user_count::total,filteruser_count::filtered_count;
+//verify schema
+grunt> describe user_data;
+user_data: {user_count::user: int,user_count::total: int,filteruser_count::filtered_count: int}
+
+//create subset of size 10 of user_data
+user_top = LIMIT user_data 10;
+DUMP user_top;
+//subset of 10 users from output
+(1,175,4)
+(2,61,8)
+(3,187,42)
+(4,28,3)
+(5,66,16)
+(6,24,9)
+(7,276,67)
+(8,70,23)
+(9,35,17)
+(10,38,5)
+
+//store output using PIG to local file system
+grunt> store delta into 'delta_output' using PigStorage (',');
+grunt> store delta_filter into 'delta_filter_output' using PigStorage (',');
+grunt> store movie_data into 'movie_data_output' using PigStorage (',');
+grunt> store user_data into 'user_data_output' using PigStorage (',');
+
